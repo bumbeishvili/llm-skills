@@ -78,7 +78,7 @@ npx degit bumbeishvili/claude-skills/plugins/mcp-api-integration/skills/mcp-api-
 
 ### [data-debug](plugins/data-debug/)
 
-Check a page's numbers against their source. Tag each figure with a `data-calc` formula, then add `#debug` to the URL to read it back in the browser.
+Check a page's numbers against their source. Tag each figure with a `data-calc` explanation in plain words, then add `#debug` to the URL to read it back in the browser.
 
 ```bash
 npx degit bumbeishvili/claude-skills/plugins/data-debug/skills/data-debug .claude/skills/data-debug

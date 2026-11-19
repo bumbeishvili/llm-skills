@@ -1,6 +1,6 @@
 {
   "name": "data-debug",
-  "description": "Tag a data-driven UI element with a `data-calc` attribute in file.column dot notation, then add `#debug` to the URL to check it in the browser: each tagged element gets a ƒx badge whose hover shows the source columns and arithmetic behind the number. Ships a framework-agnostic vanilla overlay and a Svelte component.",
+  "description": "Tag a data-driven UI element with a `data-calc` explanation (what the figure shows, its formula in named values with their source columns, and the source's real numbers through that formula), then add `#debug` to the URL to check it in the browser: each tagged chart, figure, table and filter gets a ƒx badge that opens the explanation as a card on hover or tap. Ships a framework-agnostic vanilla overlay, a Svelte component and a sweep that collects every explanation of a running app.",
   "author": {
     "name": "David Bumbeishvili",
     "email": "me@davidb.dev"
