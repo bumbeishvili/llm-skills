@@ -1,8 +1,8 @@
 // Records a narrated, cursor-driven tour of a web app at 1920x1080. A project's tour
-// script calls record() with its own segments; voice.cjs must have voiced the
-// narration first, and build.cjs turns the recording into the video.
+// script calls record() with its own segments; voice.cjs or voice-elevenlabs.cjs must have
+// voiced the narration first, and build.cjs turns the recording into the video.
 //
-//   NODE_PATH="$(npm root -g)" node tour.cjs <videoDir> dry   a still per segment, and dry/steps.json for guide.cjs
+//   NODE_PATH="$(npm root -g)" node tour.cjs <videoDir> dry   a still per segment, and dry/steps.json for guide.cjs and guide-pdf.cjs
 //   NODE_PATH="$(npm root -g)" node tour.cjs <videoDir> rec   frames + timeline.json for build.cjs
 //   STOP_AFTER=<segment id> ...                               end a take early; rec still writes it
 const { chromium } = require('playwright');
@@ -45,6 +45,8 @@ function slowPageClock(time, ratio) {
 //    put on screen: chapter chip, speed badge, lower third, stat card, scenes and cards.
 // Installed on every page load; all of it ignores the mouse, so the app gets every real click.
 function installOverlay() {
+  // This function runs in the page from its source text, so it cannot use the module's helpers.
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const svg = (body) => `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">${body}</svg>`;
   const url = (s) => `url("data:image/svg+xml,${encodeURIComponent(s)}")`;
   const arrowPath = 'M3 2 L3 22 L8.2 17.2 L11.8 25 L15.2 23.5 L11.7 15.9 L18.6 15.9 Z';
@@ -164,6 +166,7 @@ function installOverlay() {
       border-radius: 17px; background: #fff; border: 1px solid #d5d8e3; font: 500 16px ${font}; color: ${ink}; }
     #demo-browser .url .lock { width: 14px; height: 14px; flex: none; background: url("data:image/svg+xml,${encodeURIComponent(lock)}") no-repeat center; }
     #demo-browser .url .caret { width: 1.5px; height: 18px; background: ${ink}; animation: demo-blink 1s steps(1) infinite; }
+    .demo-blur { display: inline-block; filter: blur(5px); }
     @keyframes demo-blink { 50% { opacity: 0; } }
     #demo-browser .page { position: absolute; left: 0; right: 0; top: 57px; bottom: 0; background: #fff; transition: opacity .3s; }
     #demo-browser .shot { position: fixed; left: 0; top: 0; transform-origin: 0 0; opacity: 0; transition: transform .9s ${move}, opacity .35s; }
@@ -226,6 +229,10 @@ function installOverlay() {
     #demo-card figure { margin: 0; } #demo-card figure img { display: block; width: 100%; border-radius: 10px; box-shadow: 0 14px 30px rgba(0, 0, 0, .35); }
     #demo-card figcaption { display: flex; align-items: center; gap: 10px; margin-top: 10px; font: 600 17px/1.3 ${font}; text-align: left; }
     #demo-card figcaption b { width: 28px; height: 28px; font-size: 14px; }
+    #demo-card .corner { position: absolute; right: 40px; bottom: 32px; text-align: right; font: 500 12px/1.5 ${font}; color: rgba(236, 235, 255, .6); }
+    #demo-card .corner span, #demo-card .corner a { display: block; color: inherit; text-decoration: none; }
+    #demo-card .corner img { display: block; height: 17px; margin: 0 0 8px auto; }
+    #demo-card .corner sup { font-size: .7em; line-height: 0; }
   `;
   const host = document.createElement('div');
   host.id = 'demo-host';
@@ -248,6 +255,16 @@ function installOverlay() {
   const hud = $('demo-hud'), chip = $('demo-chip'), speedBadge = $('demo-speed'), lower = $('demo-lower'), stat = $('demo-stat');
   const scene = $('demo-scene'), card = $('demo-card');
   const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  // `shown` (the start of `full`, or all of it) as HTML, with the characters of `full` that
+  // belong to `blur` drawn blurred: a placeholder the viewer should see but not read, such as a
+  // domain not chosen yet. Blurred while it is being typed too.
+  const withBlur = (shown, full = shown, blur = '') => {
+    const from = blur ? full.indexOf(blur) : -1;
+    if (from < 0) return esc(shown);
+    const to = from + blur.length;
+    const hidden = shown.slice(from, to);
+    return esc(shown.slice(0, from)) + (hidden ? `<span class="demo-blur">${esc(hidden)}</span>` : '') + esc(shown.slice(to));
+  };
   const wait = (ms) => new Promise(r => setTimeout(r, ms * window.__DEMO_TIME));
   // Overlay elements are found in the shadow root, app elements in the page, and a scene's
   // own elements (a flowchart box) in the scene when the page has no match.
@@ -387,11 +404,13 @@ function installOverlay() {
       hud.style.transform = zoom === 1 && !c.x && !c.y ? '' : `translate(${c.x}px, ${c.y}px) scale(${1 / zoom})`;
     },
     // Slides to the target, then follows it every frame (a modal that grows, a
-    // panel that slides in) until the next spot or spotOff.
+    // panel that slides in) until the next spot or spotOff. A spot that was off appears on its
+    // target and fades in, instead of sliding over from wherever the last one was.
     spot(selectors, pad = 8) {
       const place = (r) => Object.assign(spot.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
+      const wasOff = spot.style.opacity !== '1';
       spotTarget = { selectors, pad };
-      spot.style.transition = '';
+      spot.style.transition = wasOff ? 'opacity .35s' : '';
       place(rectOf(selectors, pad));
       spot.style.opacity = 1;
       clearTimeout(spotSettle);
@@ -582,11 +601,11 @@ function installOverlay() {
       void browser.offsetWidth;
       browser.style.transition = '';
     },
-    browserType(text, ms) {
+    browserType(text, ms, blur = '') {
       const el = browser.querySelector('.url .txt'), start = performance.now(), total = ms * window.__DEMO_TIME;
       const step = () => {
         const k = Math.min(1, (performance.now() - start) / total);
-        el.textContent = text.slice(0, Math.round(text.length * k));
+        el.innerHTML = withBlur(text.slice(0, Math.round(text.length * k)), text, blur);
         if (k < 1) requestAnimationFrame(step);
       };
       requestAnimationFrame(step);
@@ -689,16 +708,18 @@ function installOverlay() {
       })();
     },
     // A card over the whole screen: an iris opens onto a logo, a kicker, the title word by
-    // word, a subtitle, then a numbered list (a preview) or step pictures (a recap).
-    card({ kicker = '', title = '', subtitle = '', items = [], steps = [], logo = '' }) {
+    // word, a subtitle, then a numbered list (a preview) or step pictures (a recap). `corner`
+    // is small print in the bottom-right corner (a credit), rising in last.
+    card({ kicker = '', title = '', subtitle = '', blur = '', items = [], steps = [], logo = '', corner = '' }) {
       let n = 0;
       const rise = () => `class="rise" style="${riseDelay(n++)}"`;
       card.innerHTML = (logo ? `<div class="logo">${logo}</div>` : '')
         + (kicker ? `<div class="kicker"><span ${rise()}>${esc(kicker)}</span></div>` : '')
         + (title ? `<h1>${title.split(/\s+/).map(w => `<span ${rise()}>${esc(w)}</span>`).join(' ')}</h1>` : '')
-        + (subtitle ? `<p ${rise()}>${esc(subtitle)}</p>` : '')
+        + (subtitle ? `<p ${rise()}>${withBlur(subtitle, subtitle, blur)}</p>` : '')
         + (items.length ? `<ol>${items.map((it, i) => `<li ${rise()}><b>${i + 1}</b>${esc(it)}</li>`).join('')}</ol>` : '')
-        + (steps.length ? `<div class="steps" style="--cols:${Math.min(steps.length, 4)}">${steps.map((s, i) => `<figure ${rise()}><img src="${s.src}" alt=""><figcaption><b>${i + 1}</b>${esc(s.label)}</figcaption></figure>`).join('')}</div>` : '');
+        + (steps.length ? `<div class="steps" style="--cols:${Math.min(steps.length, 4)}">${steps.map((s, i) => `<figure ${rise()}><img src="${s.src}" alt=""><figcaption><b>${i + 1}</b>${esc(s.label)}</figcaption></figure>`).join('')}</div>` : '')
+        + (corner ? `<div class="corner"><div ${rise()}>${corner}</div></div>` : '');
       void card.offsetWidth;
       card.classList.add('on');
       cover(true);
@@ -1001,10 +1022,11 @@ async function record(options) {
       return i / text.length * l.dur;
     };
     // Waits until line `id` reaches `word`, so an action lands on the word that names it.
-    const untilWord = async (id, word) => {
+    // `leadSeconds` returns that much earlier, so a move lasting that long arrives on the word.
+    const untilWord = async (id, word, leadSeconds = 0) => {
       const said = timeline.says.filter(s => s.id === id).pop();
       if (!said) throw new Error(`untilWord: "${id}" has not been said yet`);
-      const at = said.t * 1000 + wordStart(id, word) * 1000 * time;
+      const at = said.t * 1000 + Math.max(0, wordStart(id, word) - leadSeconds) * 1000 * time;
       if (Date.now() < at) await sleep(at - Date.now());
     };
     // Dropped from the video (a list or grid loading); build.cjs refuses one inside a spoken line.
@@ -1022,6 +1044,31 @@ async function record(options) {
       await demo('speed', null);
       timeline.speeds.push({ start, end: Date.now() / 1000, factor });
     };
+    // Dry run: segment `id`'s still and line for guide.cjs and guide-pdf.cjs, taken through the
+    // camera so the still shows the framing the video will have.
+    let stillTakenFor = null;
+    const takeStill = async (id) => {
+      await sleep(550 * time);   // let spotlight and callout transitions finish before the still
+      const stills = path.join(dir, 'dry');
+      fs.mkdirSync(stills, { recursive: true });
+      const c = cameraAt(Date.now());
+      await syncHud(c);
+      const { data } = await captureShot({ format: 'png', clip: clipOf(c) });
+      const file = `${String(timeline.segs.length).padStart(2, '0')}-${id}.png`;
+      fs.writeFileSync(path.join(stills, file), Buffer.from(data, 'base64'));
+      // The hotspot in the still's own pixels: page coordinates through the camera.
+      const k = viewport.width / c.w, toStill = (x, y) => ({ x: (x - c.x) * k / viewport.width, y: (y - c.y) * k / viewport.height });
+      const hotspot = target && (target.width ? { ...toStill(target.left, target.top), w: target.width * k / viewport.width, h: target.height * k / viewport.height } : toStill(target.x, target.y));
+      steps.push({ id, still: file, text: line(id).text, label: line(id).label || '', chapter: line(id).chapter || '', hotspot });
+      stillTakenFor = id;
+    };
+    // The current segment's guide still, taken now instead of when its line ends: a menu or
+    // dialog that the rest of the segment closes stays in the picture. Does nothing in a take.
+    const still = async () => {
+      if (mode !== 'dry') return;
+      if (!timeline.segs.length) throw new Error('still() must be called inside a segment');
+      await takeStill(timeline.segs[timeline.segs.length - 1].id);
+    };
     const segment = async (id, run) => {
       const start = Date.now();
       mark(timeline.segs, { id });
@@ -1034,21 +1081,7 @@ async function record(options) {
       const minEnd = speechStart + (line(id).dur * 1000 + speechPadMs) * time;
       // minEnd is already in recording time, so this waits in real time (not pause).
       if (Date.now() < minEnd) await sleep(minEnd - Date.now());
-      if (mode === 'dry') {
-        await sleep(550 * time);   // let spotlight and callout transitions finish before the still
-        const stills = path.join(dir, 'dry');
-        fs.mkdirSync(stills, { recursive: true });
-        // Through the camera, so a still shows the framing the video will have.
-        const c = cameraAt(Date.now());
-        await syncHud(c);
-        const { data } = await captureShot({ format: 'png', clip: clipOf(c) });
-        const file = `${String(timeline.segs.length).padStart(2, '0')}-${id}.png`;
-        fs.writeFileSync(path.join(stills, file), Buffer.from(data, 'base64'));
-        // The hotspot in the still's own pixels: page coordinates through the camera.
-        const k = viewport.width / c.w, toStill = (x, y) => ({ x: (x - c.x) * k / viewport.width, y: (y - c.y) * k / viewport.height });
-        const hotspot = target && (target.width ? { ...toStill(target.left, target.top), w: target.width * k / viewport.width, h: target.height * k / viewport.height } : toStill(target.x, target.y));
-        steps.push({ id, still: file, text: line(id).text, label: line(id).label || '', chapter: line(id).chapter || '', hotspot });
-      }
+      if (mode === 'dry' && stillTakenFor !== id) await takeStill(id);
       console.log(`${id.padEnd(12)} ${((Date.now() - start) / 1000 / time).toFixed(2)}s of video  ${page.url()}`);
       if (process.env.STOP_AFTER === id) throw new StopAfter();
     };
@@ -1140,7 +1173,10 @@ async function record(options) {
     // with the address ringed while line `id` plays, then zoomed to full screen on `zoomAtWord`.
     // voiceFirst starts the line with the segment, so the address is typed under the voice
     // instead of in four silent seconds; typeAtWord then starts the typing on its word.
-    const intro = async ({ id, label = '', address, zoomAtWord, afterZoom, voiceFirst = false, typeAtWord }) => {
+    // `blur` names a part of the address to show blurred (a domain not chosen yet).
+    // `cover` is an opening card (card() options): it is up before the video starts, so it is the
+    // first frame and the poster, and it holds for `coverHoldMs` before opening onto the browser window.
+    const intro = async ({ id, label = '', address, blur = '', zoomAtWord, afterZoom, voiceFirst = false, typeAtWord, cover, coverHoldMs = 2600 }) => {
       if (timeline.segs.length) throw new Error('intro() must come before any other segment');
       if (typeAtWord && !voiceFirst) throw new Error('intro: typeAtWord needs voiceFirst, so the line is playing while the address is typed');
       // The page's picture for the zoom: the mouse off the content so no hover readout is
@@ -1149,6 +1185,11 @@ async function record(options) {
       await page.mouse.move(viewport.width / 2, 4);
       await sleep(300);
       const picture = 'data:image/jpeg;base64,' + await pagePicture({ format: 'jpeg', quality: 95, clip });
+      // After the page's picture, so the card isn't in it; its iris and words finish before the first frame.
+      if (cover) {
+        await demo('card', cover);
+        await pause(2200);
+      }
       await demo('browserShow');
       mouse = { x: viewport.width / 2, y: viewport.height * 0.58 };
       await page.mouse.move(mouse.x, mouse.y);
@@ -1157,13 +1198,18 @@ async function record(options) {
       const beat = voiceFirst ? { lead: 200, glide: 700, settle: 100, type: 900, typed: 950, enter: 300, loaded: 200 }
         : { lead: 500, glide: 800, settle: 250, type: 1300, typed: 1450, enter: 450, loaded: 400 };
       await segment(id, async () => {
+        if (cover) {
+          await pause(coverHoldMs);
+          await demo('cardOff');
+          await pause(900);   // the iris closing
+        }
         if (voiceFirst) await speak(id);
         await pause(beat.lead);
         await glideTo('#demo-browser .url', beat.glide);
         await demo('ripple', mouse.x, mouse.y);
         await pause(beat.settle);
         if (typeAtWord) await untilWord(id, typeAtWord);
-        await demo('browserType', address, beat.type);
+        await demo('browserType', address, beat.type, blur);
         await pause(beat.typed);
         await demo('key', '↵ Enter');
         await pause(beat.enter);
@@ -1285,13 +1331,13 @@ async function record(options) {
         await demo('code', code, lang, highlight, typeMs);
         await page.waitForFunction(() => window.__demoSceneDone, null, { timeout: 120000 });
       },
-      card: ({ kicker, title, subtitle, items, steps = [], logo } = {}) => demo('card', { kicker, title, subtitle, items, logo, steps: steps.map(s => ({ src: snapOf(s.snap), label: s.label })) }),
+      card: ({ kicker, title, subtitle, blur, items, steps = [], logo, corner } = {}) => demo('card', { kicker, title, subtitle, blur, items, logo, corner, steps: steps.map(s => ({ src: snapOf(s.snap), label: s.label })) }),
       cardOff: () => demo('cardOff'),
       keycap: (text) => demo('key', text),
       get mouse() { return { ...mouse }; },
       glide, glideTo, center, click, clickOn, drag, dragTo, selectText, scrub, tapOverlay, typeInto, paste, press, wheelTo,
       pickOption, contextMenu, settle, ghost, snap,
-      say, speak, retip, sayNext, untilWord, offCamera, fastForward, segment, navigated, intro, chat, camera,
+      say, speak, retip, sayNext, untilWord, offCamera, fastForward, segment, still, navigated, intro, chat, camera,
     };
     try {
       await tour(t);

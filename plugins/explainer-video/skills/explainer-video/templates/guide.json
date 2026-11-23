@@ -1,0 +1,15 @@
+{
+	"kicker": "Your organisation",
+	"title": "Editing the site",
+	"subtitle": "A step-by-step guide to the editor",
+	"address": "example.com/admin",
+	"url": "https://example.com/admin",
+	"note": "Content marked \"Demo:\" is sample content.",
+	"skip": ["outro"],
+	"steps": {
+		"welcome": "Open {address} in your browser.",
+		"create": "Click New page to start a page.",
+		"fill": "Type the page's title, then set its status to Draft while you work on it.",
+		"save": "Click Save, and the page is stored with its history."
+	}
+}

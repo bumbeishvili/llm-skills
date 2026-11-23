@@ -14,7 +14,8 @@ section 2 says when each effect helps; this file says how.
 | `t.say(id, label, anchor, side, pad, avoid)` | shows the callout and starts the line's audio |
 | `t.speak(id)` | starts the line's audio with no callout (over a card, or where ink points) |
 | `t.retip(...)` / `t.sayNext(...)` | moves the callout (same line) / fades it and starts the next line |
-| `t.untilWord(id, word)` | waits for the moment `word` is spoken (Kokoro's own word times) |
+| `t.untilWord(id, word, leadSeconds)` | waits for the moment `word` is spoken (the voice's own word times), or `leadSeconds` before it, so a move that long arrives on the word |
+| `t.still()` | dry run only: the segment's still for the guides, taken now (a menu still open) instead of when its line ends |
 | `t.offCamera(run)` | the stretch inside is cut from the video |
 | `t.fastForward(run, { factor })` | the stretch inside plays `factor` times faster, with an `N×` badge |
 | `t.pause(ms)` / `t.sleep(ms)` | a pause in video time / in real time |
@@ -65,7 +66,7 @@ section 2 says when each effect helps; this file says how.
 |---|---|
 | `t.lowerThird({ title, subtitle })` / `t.lowerThirdOff()` | a name bar, bottom left |
 | `t.stat({ label, value, prefix, suffix, decimals, at })` / `t.statOff()` | a number card counting up, in a corner (`at`) |
-| `t.card({ kicker, title, subtitle, items, steps, logo })` / `t.cardOff()` | a full-screen card: title, preview list (`items`) or recap pictures (`steps`) |
+| `t.card({ kicker, title, subtitle, blur, items, steps, logo, corner })` / `t.cardOff()` | a full-screen card: title, preview list (`items`) or recap pictures (`steps`); `corner` is small print bottom right (the credit), `blur` a part of the subtitle drawn blurred |
 | `t.snap(name)` | keeps a still of this moment for a recap card's `steps` |
 | `t.flow(boxes, { title })` | a flowchart scene: boxes rising in, arrows drawn between them |
 | `t.terminal({ title, lines })` | a terminal scene: `{ cmd }` lines typed, `{ out }` lines shown |
@@ -76,7 +77,7 @@ section 2 says when each effect helps; this file says how.
 
 | Call | Does |
 |---|---|
-| `t.intro({ id, address, voiceFirst, typeAtWord, zoomAtWord, afterZoom })` | the browser-window opening |
+| `t.intro({ id, address, blur, voiceFirst, typeAtWord, zoomAtWord, afterZoom, cover, coverHoldMs })` | the browser-window opening; `cover` (card options) is the first frame, held `coverHoldMs` (2600) before it opens onto the window; `blur` draws part of the address blurred (a domain not chosen yet) |
 | `t.chat.open / pastePrompt / send / waitWritten / copy / close` | the illustrative AI chat |
 | `t.navigated()` | after a navigation: overlay back, slow motion re-applied |
 | `t.page`, `t.context`, `t.cdp` | Playwright objects, for anything app-specific |
@@ -93,6 +94,10 @@ callout would cover one of those elements, the first side that covers none is us
 
 - Kokoro `af_heart` speaks about **3.2 words a second** over a script; one line runs from
   2.3 (numbers, which it reads out in full) to 4.1 words a second (short plain words).
+- ElevenLabs' default voice read a 62-line, 4,030-character script in 226 s, against
+  Kokoro's 219 s for the same text. One of its 62 first reads was rushed (12 words in
+  2.4 s) and needed a new take.
+- A cover card puts 3.8 s before the first line: the card held, then its iris closing.
 - Each segment adds about 0.3 s after its line, plus any action that outlasts it.
 - Two minutes held 26 lines and 300 words, with ~5 s of loading cut out.
 - Cursor glides of 500–900 ms read as deliberate; under 400 ms looks like a jump.
@@ -108,9 +113,10 @@ callout would cover one of those elements, the first side that covers none is us
 **A click on the word that names it**
 
 ```js
-await t.say('save', 'Save', ['form'], 'right', 6, ['button[type=submit]']);
+await t.spot(['button[type=submit]'], 6);
+await t.speak('save');
+await t.untilWord('save', 'Save', 0.6);   // the 600 ms glide starts early, so it arrives on "Save"
 await t.glideTo('button[type=submit]', 600);
-await t.untilWord('save', 'Save');
 await t.click();
 ```
 
@@ -171,7 +177,8 @@ the row does (the app's handler through `t.page.evaluate`, or its menu item if i
 ```js
 await t.clickOn('#generate', 500);
 await t.offCamera(() => t.page.waitForSelector('.result'));   // cut from the video
-await t.say('result', 'Result', ['.result'], 'right');         // the line starts after the cut
+await t.spot(['.result'], 6);
+await t.speak('result');                                        // the line starts after the cut
 ```
 
 The build throws if a cut falls inside a spoken line: start the line after the cut. A
@@ -224,8 +231,115 @@ await t.clickOn('#code', 600);
 await t.paste('#code', REPLY);
 ```
 
-**A closing card.** `t.card({ title, subtitle: 'example.com', logo })`, then `t.speak()`
-the last line over it. The cursor hides while a card or scene is up.
+**A closing card.** `t.card({ title, subtitle: 'example.com', corner: CREDIT })`, then
+`t.speak()` the last line over it. The cursor hides while a card or scene is up.
+
+**A cover and the producer's credit.** Copy `templates/brand.json` and the logo it names into
+the video folder (or write the producer's own), then:
+
+```js
+const { loadCredit } = require(path.join(SKILL, 'credit.cjs'));
+const CREDIT = loadCredit(path.join(DIR, 'brand.json')).creditHtml();   // the logo in its own colour
+await t.intro({ id: 'welcome', address, voiceFirst: true, typeAtWord, zoomAtWord,
+  cover: { kicker: 'Global Economic Transformation', title: 'Editing the site', subtitle: 'A step-by-step guide to the editor', corner: CREDIT } });
+```
+
+The cover is up before the first frame, so it is the video's first picture; build with
+`POSTER_AT=1` to make it the poster too. `creditHtml('#1c1c1e')` recolours a logo whose SVG
+takes its colour from `var(--fill-0, …)`, for print. The date line is the build day.
+
+**A control that shows on hover.** Put the cursor on its container, wait until it is shown,
+then spot it and zoom in, all before the line names it:
+
+```js
+const tools = '.cms-section:nth-of-type(2) > .section-tools';   // the second section: the first one's up arrow is disabled
+await t.glideTo('.cms-section:nth-of-type(2)', 600, 0, 40);
+await t.page.waitForFunction((sel) => getComputedStyle(document.querySelector(sel)).opacity === '1', tools);
+await t.spot([`${tools} .up`, `${tools} .down`], 4);
+await t.camera.focus([tools], { zoom: 2.5, pad: 50, ms: 700 });
+await t.speak('sections');
+```
+
+Keep the cursor over the container for the rest of the line (glide within it, a little below
+a small button so the button stays in sight), or the toolbar hides again.
+
+**A native date input.** The browser's calendar is never in a screenshot, and in slow motion
+keys sent after the click land on the year. Click it on its word, then fill the new date:
+
+```js
+await t.untilWord('date', 'click');
+await t.click();
+await t.pause(350);
+await t.page.fill('input[type=date]', weekEarlier);   // 'YYYY-MM-DD'
+```
+
+**Paste from Word.** Rich-text editors build lists from Word's own clipboard format; a plain
+`<ul>` pasted in can arrive as separate lists. Put Word's HTML on the clipboard (the context
+needs `clipboard-read` and `clipboard-write` granted in `prepare`), then press ⌘V:
+
+```js
+const paragraphs = items.map((text) => `<p class=MsoListParagraph style="text-indent:-18.0pt;mso-list:l0 level1 lfo1"><span style="font-family:Symbol;mso-list:Ignore">·<span style="font:7.0pt">&nbsp;&nbsp;&nbsp;&nbsp; </span></span>${text}</p>`);
+await t.page.evaluate(([html, text]) => navigator.clipboard.write([new ClipboardItem({
+  'text/html': new Blob([html], { type: 'text/html' }),
+  'text/plain': new Blob([text], { type: 'text/plain' }),
+})]), [`<html><body><!--StartFragment-->${paragraphs.join('')}<!--EndFragment--></body></html>`, items.join('\n')]);
+await t.press('Meta+V');
+```
+
+**The same element twice.** A page that keeps a hidden copy of a menu for small screens
+matches a selector twice, and a spot on the hidden one sits at the page's top-left corner.
+Find the shown one: `[...document.querySelectorAll('nav')].find((nav) => nav.offsetParent !== null)`.
+
+**A menu that scrolls inside itself.** A wheel over it may not move it. Scroll it in the page
+and wait until it stops:
+
+```js
+await t.page.evaluate(([entry, list]) => {
+  const scroller = document.querySelector(list);
+  scroller.scrollBy({ top: document.querySelector(entry).getBoundingClientRect().top - scroller.getBoundingClientRect().top - 12, behavior: 'smooth' });
+}, [option, menu]);
+```
+
+**Loading that varies between takes.** An app that reads the same data again each time a
+dialog opens (a media library from a repository, its thumbnails) loads it at a different
+speed in each take, and a slow load pushes the action after its words. Answer repeat reads
+from the first response:
+
+```js
+// in prepare(context)
+const answers = new Map();
+await context.route('**/api/media**', async (route) => {
+  if (route.request().method() !== 'GET') return route.continue();
+  let answer = answers.get(route.request().url());
+  if (!answer) {
+    const response = await route.fetch();
+    answer = { status: response.status(), headers: response.headers(), body: await response.body() };
+    if (response.ok()) answers.set(route.request().url(), answer);
+  }
+  return route.fulfill(answer);
+});
+```
+
+**The ElevenLabs voice.** `ELEVENLABS_API_KEY=… node <skill>/voice-elevenlabs.cjs <dir>`. A key
+limited to text to speech is enough. It sends each line with the lines before and after it as
+context, so the intonation runs on across separately voiced lines. `ELEVENLABS_VOICE_ID`,
+`ELEVENLABS_MODEL` and `ELEVENLABS_FORMAT` change the voice, model and audio format; better
+formats than the default need a higher plan, and the API says so with a 403. `REVOICE=<id>,<id>`
+requests those lines again, for a rushed or odd read. The cache in `audio/cache/el-*` keeps
+what the API returned, so changes to the trim cost no requests.
+
+**The PDF guide.** In the tour, call `t.still()` in each segment at the moment its action
+shows best (the list open, the dialog filled in). After a dry run, copy `templates/guide.json`
+beside the narration, write one full sentence per step under `steps` (`{address}` becomes a
+link to `url`), list steps to leave out (the closing card) under `skip`, then
+`NODE_PATH="$(npm root -g)" node <skill>/guide-pdf.cjs <dir>`. It stops and names any step
+without a sentence. Look at every page: `pdftoppm -r 60 -png guide.pdf page`.
+
+**Reviewing a take.** `NODE_PATH="$(npm root -g)" node <skill>/review.cjs <dir>` writes
+`review/sheet-NN.png`, three lines a sheet, four stills a line, each labelled with its time
+and the word being said. Read the line, then its four stills. After the next take,
+`review.cjs <dir> <dir>/review-2 --against <dir>/review` lists the stills whose structural
+similarity fell under 0.92 and tiles them in `changed.png`.
 
 **A phone-sized take.** `record({ viewport: { width: 390, height: 844 }, scale: 3,
 pointer: 'touch' })` films 1170x2532 with a touch circle in place of the cursor; the
@@ -284,7 +398,7 @@ for t in ['every TQQQ day', 'every T Q Q Q day', 'The voice is Kokoro']: print(t
 | D3 transitions and count-ups twice too fast in the video | `setPlaybackRate` slows CSS and the document timeline, not `performance.now`, `Date.now` or timers | an init script runs those at half speed too |
 | A JS animation stuck at its start for seconds | Chrome's `requestAnimationFrame` timestamp follows the slowed document timeline, so it lags `performance.now` more every second | frame callbacks get the slowed `performance.now` instead |
 | Canvas charts soft after the first frame | the clip capture drops `devicePixelRatio` to 1, and a canvas redrawn after that has a 1x backing store | `devicePixelRatio` pinned to the capture scale |
-| An action lands up to 0.9 s off its word | the word's place in the text is not its place in time (numbers are read out in full, commas pause) | Kokoro's own word timings, kept by `voice.cjs` |
+| An action lands up to 0.9 s off its word | the word's place in the text is not its place in time (numbers are read out in full, commas pause) | the voice's own word timings, kept by `voice.cjs` and `voice-elevenlabs.cjs` |
 | Overlay restyled (a chat bubble squashed to 32 px) | the app's CSS for a common class (`.user`) reached the overlay | the overlay lives in a shadow root |
 | A zoomed frame 1–3 px short | Chrome snaps the clip to whole pixels | the build scales every frame to the full size (`-reinit_filter 0`) |
 | Blank frames once the page scrolls | the screenshot clip is in page coordinates, so a clip at 0,0 stays above the scrolled viewport | every capture adds the window's scroll offset to its clip |
@@ -313,9 +427,26 @@ for t in ['every TQQQ day', 'every T Q Q Q day', 'The voice is Kokoro']: print(t
 | ffmpeg hangs | Homebrew's ffmpeg with a missing dylib | `setup.sh` tests with a timeout and falls back to ffmpeg-static |
 | A cut audio clip is the wrong part | `-ss/-to` placed after `-i` apply to the output timeline, after filters like `atempo` | (if you cut audio yourself) put `-ss/-to` before `-i` |
 | A toggle ends up off when the line says on | its default depended on the time of day (a market's hours) | set it in `prepare`, assert it before clicking |
+| A line names arrows and an eye the video never shows | the toolbar appears only on hover, and the tour pointed at the first section, whose up arrow is disabled | (tour) hover the second section, wait until the toolbar is shown, then spot and zoom; `review.cjs` sheets show it |
+| Label chips and captions cover the controls being explained | a callout and burned-in captions sit over the UI | lines start with `t.speak`; build with `CAPTIONS=off` |
+| The spotlight slides across the screen to its first target | it animated from wherever the last spot was | a spot that was off fades in on its target |
+| The cursor reaches a control after its name was said | the glide started on the word | `untilWord(id, word, leadSeconds)` starts it early |
+| A list's pictures arrive after the line about them, in one take only | the app read the library from its server again, slower that take | (tour) answer repeat reads from the first response in `prepare` |
+| A date field shows the wrong year | in slow motion, keys sent after the click land on the year | (tour) `page.fill` the date after the click |
+| A pasted bulleted list arrives as separate lists | the editor builds lists from Word's clipboard format | (tour) paste Word's own HTML (recipe) |
+| The spotlight sits at the page's top-left corner | the selector matched a hidden copy of the element (a mobile menu) | (tour) take the copy with `offsetParent !== null` |
+| A wheel over a picker does not move it | the picker scrolls inside itself | (tour) `scrollBy` on the picker, then wait until it stops |
+| A scroll beside a sticky column falls short | one measured distance went stale as the column stuck | (tour) measure again on every pass |
+| An ElevenLabs clip keeps 0.7 s of silence at its end | a click (−30 to −46 dB) after the silence held the trim open | the trim drops sounds under 60 ms set 240 ms apart from the speech |
+| `voice-elevenlabs.cjs` stops: "looks wrong" on one line | a rushed read (12 words in 2.4 s) | `REVOICE=<id>` for a new take |
+| ElevenLabs answers 403 for the audio format | better formats need a higher plan | the default `mp3_44100_128` works on every plan |
+| ™ prints as small letters on the baseline | the font draws it there | `credit.cjs` raises ™ and ® |
+| A finished video's tour, narration and scripts are gone | the work folder was in `/tmp`, which a restart empties | keep the video folder somewhere durable |
+| `ffprobe` hangs | Homebrew's ffprobe with a missing dylib | the kit has no ffprobe; read a video's size with `$FF -i video.mp4` |
 
 ## Looking at a take
 
+`review.cjs` is the main check: four stills a line, at its words (recipe above).
 `verify.cjs` writes `contact-sheet.png`, one frame every 4 seconds. For a closer look:
 
 ```bash
@@ -327,7 +458,8 @@ $FF -ss 12.5 -i video.mp4 -frames:v 1 at-12.5.png
 should land. To tile dry stills, pass `-reinit_filter 0` before the input: zoomed stills
 differ by a few pixels, and a rebuilt filter graph drops a half-filled tile.
 
-Check: the callout never sits on the control being used; the spotlight fits its target;
+Check: everything a line names is on screen and visible while it is named; no callout or
+caption sits on the control being used; the spotlight fits its target;
 each screen shows the state its line describes; no frozen frame longer than a line pause;
 the intro hands over to the live page without a jump; no screen-layer item (stat card,
 lower third, chip) covers what the line is about.
